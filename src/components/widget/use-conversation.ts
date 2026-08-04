@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { createWidgetClient } from "@/lib/supabase/widget-client";
 import type { Conversation } from "@/lib/supabase/types";
 
 interface ConversationState {
@@ -16,7 +16,7 @@ interface ConversationState {
 // reloads because the Supabase browser client persists the anon session
 // in localStorage, so the same customer_id comes back on the next visit.
 export function useConversation() {
-  const [supabase] = useState(() => createClient());
+  const [supabase] = useState(() => createWidgetClient());
   const [state, setState] = useState<ConversationState>({
     loading: true,
     error: null,
