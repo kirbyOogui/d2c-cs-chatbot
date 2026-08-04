@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useConversation } from "./use-conversation";
 import { useMessages } from "./use-messages";
 
@@ -10,6 +10,13 @@ const BRAND_COLOR = "#16a34a";
 
 export function ChatWidget() {
   const [open, setOpen] = useState(false);
+
+  // When embedded via public/widget.js, this runs inside an <iframe> sized
+  // to just the closed bubble. Tell the parent frame to resize so the open
+  // panel isn't clipped -- a no-op (nothing listens) when not embedded.
+  useEffect(() => {
+    window.parent.postMessage({ source: "cs-chat-widget", open }, "*");
+  }, [open]);
   const { supabase, conversationId, loading: bootLoading, error } =
     useConversation();
   const { messages, loading: messagesLoading } = useMessages(
