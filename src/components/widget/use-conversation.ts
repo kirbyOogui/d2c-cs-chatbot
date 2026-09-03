@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createWidgetClient } from "@/lib/supabase/widget-client";
 import type { Conversation, ConversationStatus } from "@/lib/supabase/types";
 
@@ -27,16 +27,33 @@ const INITIAL_STATE: ConversationState = {
 export function useConversation() {
   const [supabase] = useState(() => createWidgetClient());
   const [state, setState] = useState<ConversationState>(INITIAL_STATE);
+  // Bumped by startNewConversation() to force the bootstrap effect to re-run
+  // against a fresh anon identity instead of resolving the same one again.
+  const [resetToken, setResetToken] = useState(0);
+  const startingFreshRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
 
     async function bootstrap() {
-      // getUser() (not getSession()) so a locally-cached JWT for a user that
-      // no longer exists server-side is caught here and re-authenticated,
-      // instead of surfacing later as an opaque FK-violation on insert.
-      const { data: userData } = await supabase.auth.getUser();
-      let userId = userData.user?.id ?? null;
+      setState((current) => ({ ...current, loading: true, error: null }));
+
+      let userId: string | null = null;
+
+      if (startingFreshRef.current) {
+        // Drop the persisted anon session so a brand new customer_id (and
+        // therefore a brand new conversation) gets created below, rather
+        // than resolving straight back to the one the customer just left.
+        await supabase.auth.signOut();
+        startingFreshRef.current = false;
+      } else {
+        // getUser() (not getSession()) so a locally-cached JWT for a user
+        // that no longer exists server-side is caught here and
+        // re-authenticated, instead of surfacing later as an opaque
+        // FK-violation on insert.
+        const { data: userData } = await supabase.auth.getUser();
+        userId = userData.user?.id ?? null;
+      }
 
       if (!userId) {
         const { data: anonData, error: anonError } =
@@ -107,7 +124,7 @@ export function useConversation() {
     return () => {
       cancelled = true;
     };
-  }, [supabase]);
+  }, [supabase, resetToken]);
 
   // Keep conversationStatus live -- escalation can happen mid-session (the
   // AI's own first reply can flip ai_handling -> waiting_operator), and an
@@ -137,5 +154,10 @@ export function useConversation() {
     };
   }, [supabase, state.conversationId]);
 
-  return { supabase, ...state };
+  const startNewConversation = useCallback(() => {
+    startingFreshRef.current = true;
+    setResetToken((n) => n + 1);
+  }, []);
+
+  return { supabase, ...state, startNewConversation };
 }
