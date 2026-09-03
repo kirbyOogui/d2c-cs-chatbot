@@ -22,8 +22,15 @@ export function ChatWidget() {
   useEffect(() => {
     window.parent.postMessage({ source: "cs-chat-widget", open }, "*");
   }, [open]);
-  const { supabase, conversationId, loading: bootLoading, error } =
-    useConversation();
+  const {
+    supabase,
+    conversationId,
+    conversationStatus,
+    loading: bootLoading,
+    error,
+  } = useConversation();
+  const handedOff =
+    conversationStatus === "waiting_operator" || conversationStatus === "operator_handling";
   const { messages, loading: messagesLoading } = useMessages(
     supabase,
     conversationId
@@ -68,6 +75,10 @@ export function ChatWidget() {
     if (sendError) {
       // put the draft back so the customer doesn't lose what they typed
       setInput(content);
+    } else if (handedOff) {
+      // Already escalated: /api/ai-respond would just no-op (see route.ts),
+      // so skip the call and the typing indicator entirely rather than
+      // showing "AI is typing" for a reply that will never come.
     } else {
       // fire-and-forget: the AI's reply arrives via the Realtime subscription,
       // not this response, so the widget doesn't need to wait on it
@@ -146,6 +157,11 @@ export function ChatWidget() {
         {!bootLoading && !messagesLoading && messages.length === 0 && (
           <p className="text-center text-sm text-zinc-400">
             ご質問をお気軽にどうぞ。担当AIが対応します。
+          </p>
+        )}
+        {handedOff && (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-center text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-400">
+            現在、担当者が対応しています。しばらくお待ちください。
           </p>
         )}
         {messages.map((message) => (

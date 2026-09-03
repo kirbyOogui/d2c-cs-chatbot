@@ -2,14 +2,23 @@
 
 import { useEffect, useState } from "react";
 import { createWidgetClient } from "@/lib/supabase/widget-client";
-import type { Conversation } from "@/lib/supabase/types";
+import type { Conversation, ConversationStatus } from "@/lib/supabase/types";
 
 interface ConversationState {
   loading: boolean;
   error: string | null;
   customerId: string | null;
   conversationId: string | null;
+  conversationStatus: ConversationStatus | null;
 }
+
+const INITIAL_STATE: ConversationState = {
+  loading: true,
+  error: null,
+  customerId: null,
+  conversationId: null,
+  conversationStatus: null,
+};
 
 // Bootstraps an anonymous customer session and resolves (or creates) the
 // conversation this widget instance should be talking to. Reused across
@@ -17,12 +26,7 @@ interface ConversationState {
 // in localStorage, so the same customer_id comes back on the next visit.
 export function useConversation() {
   const [supabase] = useState(() => createWidgetClient());
-  const [state, setState] = useState<ConversationState>({
-    loading: true,
-    error: null,
-    customerId: null,
-    conversationId: null,
-  });
+  const [state, setState] = useState<ConversationState>(INITIAL_STATE);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,12 +43,7 @@ export function useConversation() {
           await supabase.auth.signInAnonymously();
         if (anonError) {
           if (!cancelled) {
-            setState({
-              loading: false,
-              error: anonError.message,
-              customerId: null,
-              conversationId: null,
-            });
+            setState({ ...INITIAL_STATE, loading: false, error: anonError.message });
           }
           return;
         }
@@ -55,20 +54,20 @@ export function useConversation() {
 
       const { data: existing, error: existingError } = await supabase
         .from("conversations")
-        .select("id")
+        .select("id, status")
         .eq("customer_id", userId)
         .neq("status", "closed")
         .order("created_at", { ascending: false })
         .limit(1)
-        .maybeSingle<Pick<Conversation, "id">>();
+        .maybeSingle<Pick<Conversation, "id" | "status">>();
 
       if (existingError) {
         if (!cancelled) {
           setState({
+            ...INITIAL_STATE,
             loading: false,
             error: existingError.message,
             customerId: userId,
-            conversationId: null,
           });
         }
         return;
@@ -81,6 +80,7 @@ export function useConversation() {
             error: null,
             customerId: userId,
             conversationId: existing.id,
+            conversationStatus: existing.status,
           });
         }
         return;
@@ -89,7 +89,7 @@ export function useConversation() {
       const { data: created, error: createError } = await supabase
         .from("conversations")
         .insert({ customer_id: userId })
-        .select("id")
+        .select("id, status")
         .single();
 
       if (!cancelled) {
@@ -98,6 +98,7 @@ export function useConversation() {
           error: createError?.message ?? null,
           customerId: userId,
           conversationId: created?.id ?? null,
+          conversationStatus: created?.status ?? null,
         });
       }
     }
@@ -107,6 +108,34 @@ export function useConversation() {
       cancelled = true;
     };
   }, [supabase]);
+
+  // Keep conversationStatus live -- escalation can happen mid-session (the
+  // AI's own first reply can flip ai_handling -> waiting_operator), and an
+  // operator can later pick it up or close it out from the admin console.
+  useEffect(() => {
+    if (!state.conversationId) return;
+
+    const channel = supabase
+      .channel(`conv-status-${state.conversationId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "cs_chat",
+          table: "conversations",
+          filter: `id=eq.${state.conversationId}`,
+        },
+        (payload) => {
+          const next = payload.new as Conversation;
+          setState((current) => ({ ...current, conversationStatus: next.status }));
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [supabase, state.conversationId]);
 
   return { supabase, ...state };
 }
