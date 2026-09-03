@@ -1,8 +1,13 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useConversation } from "./use-conversation";
 import { useMessages } from "./use-messages";
+
+// Safety net: clear the "AI is typing" indicator even if no reply ever
+// arrives (e.g. the conversation was already escalated, so /api/ai-respond
+// intentionally skips without inserting a message).
+const AI_TYPING_TIMEOUT_MS = 15000;
 
 // Placeholder brand color -- swap to the client's actual brand color via
 // this one CSS variable once we have it (see AGENTS.md / hearing notes).
@@ -25,6 +30,28 @@ export function ChatWidget() {
   );
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [aiTyping, setAiTyping] = useState(false);
+  const aiTypingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function clearAiTypingTimeout() {
+    if (aiTypingTimeoutRef.current) {
+      clearTimeout(aiTypingTimeoutRef.current);
+      aiTypingTimeoutRef.current = null;
+    }
+  }
+
+  // Drop the typing indicator as soon as the AI's (or an operator's) reply
+  // actually lands via the Realtime subscription.
+  useEffect(() => {
+    if (!aiTyping) return;
+    const last = messages[messages.length - 1];
+    if (last && last.sender_type !== "customer") {
+      setAiTyping(false);
+      clearAiTypingTimeout();
+    }
+  }, [messages, aiTyping]);
+
+  useEffect(() => clearAiTypingTimeout, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -44,12 +71,19 @@ export function ChatWidget() {
     } else {
       // fire-and-forget: the AI's reply arrives via the Realtime subscription,
       // not this response, so the widget doesn't need to wait on it
+      setAiTyping(true);
+      clearAiTypingTimeout();
+      aiTypingTimeoutRef.current = setTimeout(() => {
+        setAiTyping(false);
+      }, AI_TYPING_TIMEOUT_MS);
       fetch("/api/ai-respond", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ conversationId }),
       }).catch(() => {
         // network hiccup -- the customer can just send another message
+        setAiTyping(false);
+        clearAiTypingTimeout();
       });
     }
     setSending(false);
@@ -142,6 +176,15 @@ export function ChatWidget() {
             </div>
           </div>
         ))}
+        {aiTyping && (
+          <div className="flex justify-start">
+            <div className="flex items-center gap-1 rounded-2xl bg-zinc-100 px-3 py-2.5 dark:bg-zinc-800">
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.3s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.15s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400" />
+            </div>
+          </div>
+        )}
       </div>
 
       <form
